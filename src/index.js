@@ -31,6 +31,7 @@ const {
   restoreBackup,
   revokeAll,
   revokeLatestStrike,
+  setStrikeAnnouncement,
   setConfig,
   setManagedRoles,
 } = require('./store');
@@ -59,6 +60,24 @@ const roleDefinitions = [
   { key: 'blacklisted', name: 'Blacklisted', color: 0x2b2d31 },
 ];
 
+const DONE = 'Done.';
+const NOT_COMPLETED = 'Not completed.';
+
+function cleanBotText(value) {
+  return String(value ?? '')
+    .replace(/[\p{Extended_Pictographic}\p{Regional_Indicator}\uFE0F\u200D]/gu, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+function completed(detail = '') {
+  return detail ? `${DONE} ${cleanBotText(detail)}` : DONE;
+}
+
+function notCompleted(detail = '') {
+  return detail ? `${NOT_COMPLETED} ${cleanBotText(detail)}` : NOT_COMPLETED;
+}
+
 function isServerManager(interaction) {
   return (
     interaction.memberPermissions?.has(PermissionFlagsBits.Administrator) ||
@@ -78,7 +97,7 @@ function canModerate(interaction) {
 async function requireGuild(interaction) {
   if (!interaction.inGuild()) {
     await interaction.reply({
-      content: '❌ This command can only be used inside a server.',
+      content: notCompleted('This command can only be used inside a server.'),
       ephemeral: true,
     });
     return false;
@@ -89,7 +108,7 @@ async function requireGuild(interaction) {
 async function requireModerator(interaction) {
   if (!canModerate(interaction)) {
     await interaction.reply({
-      content: '❌ You are not allowed to use the strike system.',
+      content: notCompleted('You are not allowed to use the strike system.'),
       ephemeral: true,
     });
     return false;
@@ -100,7 +119,7 @@ async function requireModerator(interaction) {
 async function requireServerManager(interaction) {
   if (!isOwner(interaction.user.id) && !isWhitelisted(interaction.guildId, interaction.user.id)) {
     await interaction.reply({
-      content: '❌ Only the bot owner or a whitelisted moderator can do that.',
+      content: notCompleted('Only the bot owner or a whitelisted moderator can do that.'),
       ephemeral: true,
     });
     return false;
@@ -115,7 +134,7 @@ function isImageAttachment(attachment) {
 }
 
 function formatStrikeMessage(userId, strikeNumber, reason) {
-  return `❌ - <@${userId}> has been **STRIKED ${strikeNumber}/3** due to **${reason}** - ❌`;
+  return `- <@${userId}> has been **STRIKED ${strikeNumber}/3** due to **${cleanBotText(reason)}** -`;
 }
 
 function formatStrikeRecord(strike) {
@@ -126,7 +145,7 @@ function formatStrikeRecord(strike) {
   const expires = strike.expiresAt
     ? ` · expires ${new Date(strike.expiresAt).toLocaleDateString('en-US')}`
     : '';
-  return `**${strike.number}/3** — ${strike.reason} · ${strike.status}${expires} · ${date}`;
+  return `**${strike.number}/3** — ${cleanBotText(strike.reason)} · ${strike.status}${expires} · ${date}`;
 }
 
 async function fetchTextChannel(guild, channelId) {
@@ -141,8 +160,8 @@ async function sendAudit(guild, title, description, color = 0x5865f2, imageUrl) 
 
   const embed = new EmbedBuilder()
     .setColor(color)
-    .setTitle(title)
-    .setDescription(description)
+    .setTitle(cleanBotText(title))
+    .setDescription(cleanBotText(description))
     .setTimestamp();
   if (imageUrl) embed.setImage(imageUrl);
 
@@ -156,7 +175,7 @@ async function notifyOwner(content, attachmentPath) {
   try {
     const owner = await client.users.fetch(OWNER_ID);
     await owner.send({
-      content,
+      content: cleanBotText(content),
       files: attachmentPath ? [{ attachment: attachmentPath, name: path.basename(attachmentPath) }] : [],
       allowedMentions: { parse: [] },
     });
@@ -262,20 +281,22 @@ async function storeProof(guild, targetUser, proof, moderator) {
 
 async function handleStrikeAdd(interaction) {
   const user = interaction.options.getUser('user');
-  const reason = interaction.options.getString('reason');
+  const reason = cleanBotText(interaction.options.getString('reason'));
   const proof = interaction.options.getAttachment('proof');
   const currentStrikes = getStrikes(interaction.guildId, user.id);
 
   if (currentStrikes.length >= 3) {
     await interaction.reply({
-      content: `❌ <@${user.id}> is already at the maximum of **3/3 strikes**. Use \`/strike revoke\` before adding another.`,
+      content: notCompleted(
+        `<@${user.id}> is already at the maximum of **3/3 strikes**. Use \`/strike revoke\` before adding another.`
+      ),
       ephemeral: true,
     });
     return;
   }
   if (!isImageAttachment(proof)) {
     await interaction.reply({
-      content: '❌ Proof is required and must be an image screenshot.',
+      content: notCompleted('Proof is required and must be an image screenshot.'),
       ephemeral: true,
     });
     return;
@@ -288,7 +309,7 @@ async function handleStrikeAdd(interaction) {
     proof,
     interaction.user.tag
   );
-  addStrike(interaction.guildId, user.id, {
+  const addedStrikes = addStrike(interaction.guildId, user.id, {
     number,
     reason,
     ...storedProof,
@@ -314,20 +335,29 @@ async function handleStrikeAdd(interaction) {
     getConfig(interaction.guildId).strikeChannelId
   );
   if (configuredChannel && configuredChannel.id !== interaction.channelId) {
-    await configuredChannel.send(strikePayload);
+    const announcementMessage = await configuredChannel.send(strikePayload);
+    await setStrikeAnnouncement(interaction.guildId, user.id, addedStrikes.at(-1).id, {
+      channelId: announcementMessage.channelId,
+      messageId: announcementMessage.id,
+    });
     await interaction.reply({
-      content: `✅ Strike announcement sent to <#${configuredChannel.id}>.`,
+      content: completed(`Strike announcement sent to <#${configuredChannel.id}>.`),
       ephemeral: true,
     });
   } else {
     await interaction.reply(strikePayload);
+    const announcementMessage = await interaction.fetchReply();
+    await setStrikeAnnouncement(interaction.guildId, user.id, addedStrikes.at(-1).id, {
+      channelId: announcementMessage.channelId,
+      messageId: announcementMessage.id,
+    });
   }
 }
 
 async function handleStrike3(interaction) {
   const user = interaction.options.getUser('user');
-  const consequence = interaction.options.getString('consequence');
-  const reason = interaction.options.getString('reason');
+  const consequence = cleanBotText(interaction.options.getString('consequence'));
+  const reason = cleanBotText(interaction.options.getString('reason'));
   const proof = interaction.options.getAttachment('proof');
   const currentStrikes = getStrikes(interaction.guildId, user.id);
 
@@ -335,15 +365,17 @@ async function handleStrike3(interaction) {
     await interaction.reply({
       content:
         currentStrikes.length >= 3
-          ? `❌ <@${user.id}> is already at **STRIKED 3/3**.`
-          : `❌ <@${user.id}> has **${currentStrikes.length}/3** active strikes. Use \`/strike add\` until they are at **2/3**, then use \`/strike3\`.`,
+          ? notCompleted(`<@${user.id}> is already at **STRIKED 3/3**.`)
+          : notCompleted(
+              `<@${user.id}> has **${currentStrikes.length}/3** active strikes. Use \`/strike add\` until they are at **2/3**, then use \`/strike3\`.`
+            ),
       ephemeral: true,
     });
     return;
   }
   if (!isImageAttachment(proof)) {
     await interaction.reply({
-      content: '❌ Proof is required and must be an image screenshot.',
+      content: notCompleted('Proof is required and must be an image screenshot.'),
       ephemeral: true,
     });
     return;
@@ -355,7 +387,7 @@ async function handleStrike3(interaction) {
     proof,
     interaction.user.tag
   );
-  addStrike(interaction.guildId, user.id, {
+  const addedStrikes = addStrike(interaction.guildId, user.id, {
     number: 3,
     reason,
     consequence,
@@ -375,7 +407,7 @@ async function handleStrike3(interaction) {
   );
 
   const finalStrikePayload = {
-    content: `❌ - <@${user.id}> has been **${consequence}** due to **STRIKED 3/3** - ❌`,
+    content: `- <@${user.id}> has been **${consequence}** due to **STRIKED 3/3** -`,
     allowedMentions: { users: [user.id] },
   };
   const configuredChannel = await fetchTextChannel(
@@ -383,14 +415,48 @@ async function handleStrike3(interaction) {
     getConfig(interaction.guildId).strikeChannelId
   );
   if (configuredChannel && configuredChannel.id !== interaction.channelId) {
-    await configuredChannel.send(finalStrikePayload);
+    const announcementMessage = await configuredChannel.send(finalStrikePayload);
+    await setStrikeAnnouncement(interaction.guildId, user.id, addedStrikes.at(-1).id, {
+      channelId: announcementMessage.channelId,
+      messageId: announcementMessage.id,
+    });
     await interaction.reply({
-      content: `✅ Final strike announcement sent to <#${configuredChannel.id}>.`,
+      content: completed(`Final strike announcement sent to <#${configuredChannel.id}>.`),
       ephemeral: true,
     });
   } else {
     await interaction.reply(finalStrikePayload);
+    const announcementMessage = await interaction.fetchReply();
+    await setStrikeAnnouncement(interaction.guildId, user.id, addedStrikes.at(-1).id, {
+      channelId: announcementMessage.channelId,
+      messageId: announcementMessage.id,
+    });
   }
+}
+
+async function replyToRevokedStrike(guild, strike, fallbackChannel) {
+  if (strike.announcementChannelId && strike.announcementMessageId) {
+    const channel = await fetchTextChannel(guild, strike.announcementChannelId);
+    if (channel?.messages?.fetch) {
+      const originalMessage = await channel.messages
+        .fetch(strike.announcementMessageId)
+        .catch(() => null);
+      if (originalMessage) {
+        await originalMessage
+          .reply({ content: '## REVOKED', allowedMentions: { parse: [] } })
+          .catch(() => {});
+        return true;
+      }
+    }
+  }
+
+  const channel =
+    (await fetchTextChannel(guild, getConfig(guild.id).strikeChannelId)) || fallbackChannel;
+  if (!channel) return false;
+  await channel
+    .send({ content: '## REVOKED', allowedMentions: { parse: [] } })
+    .catch(() => {});
+  return true;
 }
 
 async function handleProof(interaction) {
@@ -400,7 +466,7 @@ async function handleProof(interaction) {
 
   if (!latest?.proofUrl) {
     await interaction.reply({
-      content: `❌ No strike proof was found for <@${user.id}>.`,
+      content: notCompleted(`No strike proof was found for <@${user.id}>.`),
       ephemeral: true,
     });
     return;
@@ -435,13 +501,14 @@ async function handleStrikeRevoke(interaction) {
   const revoked = revokeLatestStrike(interaction.guildId, user.id);
   if (!revoked) {
     await interaction.reply({
-      content: `❌ <@${user.id}> has no active strikes to revoke.`,
+      content: notCompleted(`<@${user.id}> has no active strikes to revoke.`),
       ephemeral: true,
     });
     return;
   }
 
   await syncStrikeRoles(interaction.guild, user.id);
+  await replyToRevokedStrike(interaction.guild, revoked, interaction.channel);
   const remaining = getStrikes(interaction.guildId, user.id).length;
   await sendAudit(
     interaction.guild,
@@ -450,7 +517,9 @@ async function handleStrikeRevoke(interaction) {
     0x57f287
   );
   await interaction.reply({
-    content: `✅ Revoked <@${user.id}>'s **${revoked.number}/3** strike. They now have **${remaining}/3** active strikes.`,
+    content: completed(
+      `Revoked <@${user.id}>'s **${revoked.number}/3** strike. They now have **${remaining}/3** active strikes.`
+    ),
     allowedMentions: { users: [user.id] },
   });
 }
@@ -459,7 +528,7 @@ async function handleStatus(interaction) {
   const user = interaction.options.getUser('user');
   const strikes = getStrikes(interaction.guildId, user.id);
   if (strikes.length === 0) {
-    await interaction.reply({ content: `✅ <@${user.id}> has **0/3** active strikes.` });
+    await interaction.reply({ content: completed(`<@${user.id}> has **0/3** active strikes.`) });
     return;
   }
 
@@ -478,7 +547,9 @@ async function handleHistory(interaction) {
   const user = interaction.options.getUser('user');
   const history = getStrikeHistory(interaction.guildId, user.id);
   if (!history.length) {
-    await interaction.reply({ content: `✅ No strike history was found for <@${user.id}>.` });
+    await interaction.reply({
+      content: completed(`No strike history was found for <@${user.id}>.`),
+    });
     return;
   }
 
@@ -486,7 +557,7 @@ async function handleHistory(interaction) {
     embeds: [
       new EmbedBuilder()
         .setColor(0x5865f2)
-        .setTitle(`Strike history — ${user.tag}`)
+        .setTitle(`Strike history — ${cleanBotText(user.tag)}`)
         .setDescription(history.slice(0, 15).map(formatStrikeRecord).join('\n')),
     ],
     allowedMentions: { users: [user.id] },
@@ -496,6 +567,15 @@ async function handleHistory(interaction) {
 async function handleRevokeAll(interaction) {
   const result = revokeAll(interaction.guildId);
   await Promise.all(result.userIds.map((userId) => syncStrikeRoles(interaction.guild, userId)));
+  const configuredChannel = await fetchTextChannel(
+    interaction.guild,
+    getConfig(interaction.guildId).strikeChannelId
+  );
+  await Promise.all(
+    result.revokedRecords.map((record) =>
+      replyToRevokedStrike(interaction.guild, record, configuredChannel || interaction.channel)
+    )
+  );
   await sendAudit(
     interaction.guild,
     'All strikes revoked',
@@ -503,7 +583,9 @@ async function handleRevokeAll(interaction) {
     0x57f287
   );
   await interaction.reply({
-    content: `✅ Revoked **${result.count}** active strike${result.count === 1 ? '' : 's'} for every user.`,
+    content: completed(
+      `Revoked **${result.count}** active strike${result.count === 1 ? '' : 's'} for every user.`
+    ),
   });
 }
 
@@ -516,8 +598,8 @@ async function handleWhitelist(interaction) {
     await interaction.reply({
       content:
         ids.length > 0
-          ? `🛡️ Whitelisted moderators:\n${ids.map((id) => `• <@${id}>`).join('\n')}`
-          : '🛡️ The strike whitelist is empty. Server managers can still use the commands.',
+          ? `Whitelisted moderators:\n${ids.map((id) => `- <@${id}>`).join('\n')}`
+          : 'The strike whitelist is empty. The bot owner can still use the commands.',
       ephemeral: true,
       allowedMentions: { users: ids },
     });
@@ -530,8 +612,8 @@ async function handleWhitelist(interaction) {
     const added = addToWhitelist(interaction.guildId, user.id);
     await interaction.reply({
       content: added
-        ? `✅ Added <@${user.id}> to the strike whitelist.`
-        : `ℹ️ <@${user.id}> is already on the strike whitelist.`,
+        ? completed(`Added <@${user.id}> to the strike whitelist.`)
+        : completed(`<@${user.id}> is already on the strike whitelist.`),
       ephemeral: true,
       allowedMentions: { users: [user.id] },
     });
@@ -541,8 +623,8 @@ async function handleWhitelist(interaction) {
   const removed = removeFromWhitelist(interaction.guildId, user.id);
   await interaction.reply({
     content: removed
-      ? `✅ Removed <@${user.id}> from the strike whitelist.`
-      : `ℹ️ <@${user.id}> was not on the strike whitelist.`,
+      ? completed(`Removed <@${user.id}> from the strike whitelist.`)
+      : completed(`<@${user.id}> was not on the strike whitelist.`),
     ephemeral: true,
     allowedMentions: { users: [user.id] },
   });
@@ -575,7 +657,7 @@ async function handleConfig(interaction) {
   const channel = interaction.options.getChannel('channel');
   setConfig(interaction.guildId, keyBySubcommand[subcommand], channel.id);
   await interaction.reply({
-    content: `✅ ${subcommand} channel set to <#${channel.id}>.`,
+    content: completed(`${subcommand} channel set to <#${channel.id}>.`),
     ephemeral: true,
   });
   await sendAudit(
@@ -591,7 +673,7 @@ async function handleSetChannel(interaction) {
   const channel = interaction.options.getChannel('channel');
   setConfig(interaction.guildId, 'strikeChannelId', channel.id);
   await interaction.reply({
-    content: `✅ Strike announcements will now be sent to <#${channel.id}>.`,
+    content: completed(`Strike announcements will now be sent to <#${channel.id}>.`),
     ephemeral: true,
   });
   await sendAudit(
@@ -603,11 +685,11 @@ async function handleSetChannel(interaction) {
 }
 
 async function handleAppeal(interaction) {
-  const message = interaction.options.getString('message');
+  const message = cleanBotText(interaction.options.getString('message'));
   const proof = interaction.options.getAttachment('proof');
   if (!isImageAttachment(proof)) {
     await interaction.reply({
-      content: '❌ Appeals must include an image attachment.',
+      content: notCompleted('Appeals must include an image attachment.'),
       ephemeral: true,
     });
     return;
@@ -617,7 +699,7 @@ async function handleAppeal(interaction) {
     .setColor(0xf1c40f)
     .setTitle('New strike appeal')
     .addFields(
-      { name: 'Server', value: interaction.guild.name, inline: true },
+      { name: 'Server', value: cleanBotText(interaction.guild.name), inline: true },
       { name: 'Member', value: `<@${interaction.user.id}>`, inline: true },
       { name: 'Submitted', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: true },
       { name: 'Appeal', value: message }
@@ -657,13 +739,13 @@ async function handleAppeal(interaction) {
 
   if (!deliveries.some(Boolean)) {
     await interaction.reply({
-      content: '❌ I could not deliver the appeal to either configured appeal reviewer.',
+      content: notCompleted('I could not deliver the appeal to either configured appeal reviewer.'),
       ephemeral: true,
     });
     return;
   }
   await interaction.reply({
-    content: '✅ Your image appeal was sent to the appeal reviewers.',
+    content: completed('Your image appeal was sent to the appeal reviewers.'),
     ephemeral: true,
   });
 }
@@ -681,7 +763,7 @@ async function handleNote(interaction) {
             .slice(0, 15)
             .map(
               (note) =>
-                `• ${note.text} — <@${note.moderatorId}> · <t:${Math.floor(
+                `- ${cleanBotText(note.text)} — <@${note.moderatorId}> · <t:${Math.floor(
                   new Date(note.createdAt).getTime() / 1000
                 )}:R>`
             )
@@ -693,7 +775,7 @@ async function handleNote(interaction) {
     return;
   }
 
-  const text = interaction.options.getString('text');
+  const text = cleanBotText(interaction.options.getString('text'));
   addNote(interaction.guildId, user.id, {
     text,
     moderatorId: interaction.user.id,
@@ -718,7 +800,7 @@ async function handleNote(interaction) {
     });
   }
   await interaction.reply({
-    content: `✅ Added an internal note for <@${user.id}>.`,
+    content: completed(`Added an internal note for <@${user.id}>.`),
     ephemeral: true,
     allowedMentions: { users: [user.id] },
   });
@@ -732,15 +814,15 @@ async function handleBackup(interaction) {
   );
   fs.writeFileSync(filePath, JSON.stringify(getBackup(), null, 2));
   const sent = await notifyOwner(
-    `📦 Strike bot backup requested by ${interaction.user.tag} from ${interaction.guild.name}. This includes all persistent strike data, history, notes, channel configuration, whitelist entries, and managed role IDs.`,
+    `Strike bot backup requested by ${interaction.user.tag} from ${interaction.guild.name}. This includes all persistent strike data, history, notes, channel configuration, whitelist entries, and managed role IDs.`,
     filePath
   );
   fs.unlinkSync(filePath);
 
   await interaction.reply({
     content: sent
-      ? `✅ Full data backup sent by DM to <@${OWNER_ID}>.`
-      : '❌ I could not DM the backup to the configured owner. Check that their DMs are open.',
+      ? completed(`Full data backup sent by DM to <@${OWNER_ID}>.`)
+      : notCompleted('I could not DM the backup to the configured owner. Check that their DMs are open.'),
     ephemeral: true,
     allowedMentions: { users: [OWNER_ID] },
   });
@@ -749,7 +831,7 @@ async function handleBackup(interaction) {
 async function handleRestore(interaction) {
   if (!isOwner(interaction.user.id)) {
     await interaction.reply({
-      content: '❌ Only the configured bot owner can restore a full backup.',
+      content: notCompleted('Only the configured bot owner can restore a full backup.'),
       ephemeral: true,
     });
     return;
@@ -758,7 +840,7 @@ async function handleRestore(interaction) {
   const attachment = interaction.options.getAttachment('backup');
   if (!attachment.name?.toLowerCase().endsWith('.json') || attachment.size > 10_000_000) {
     await interaction.reply({
-      content: '❌ Attach a JSON backup file smaller than 10 MB.',
+      content: notCompleted('Attach a JSON backup file smaller than 10 MB.'),
       ephemeral: true,
     });
     return;
@@ -778,13 +860,17 @@ async function handleRestore(interaction) {
       0xf1c40f
     );
     await interaction.reply({
-      content: '✅ Backup restored successfully. Strike data, history, notes, channels, and roles were restored.',
+      content: completed(
+        'Backup restored successfully. Strike data, history, notes, channels, and roles were restored.'
+      ),
       ephemeral: true,
     });
   } catch (error) {
     console.error('Restore failed:', error);
     await interaction.reply({
-      content: '❌ That backup could not be restored. Make sure it was created by `/backup` and was not edited.',
+      content: notCompleted(
+        'That backup could not be restored. Make sure it was created by `/backup` and was not edited.'
+      ),
       ephemeral: true,
     });
   }
@@ -833,7 +919,7 @@ client.once(Events.ClientReady, async (readyClient) => {
 
 client.on(Events.GuildCreate, async (guild) => {
   await ensureManagedRoles(guild);
-  await notifyOwner(`✅ Strike bot joined **${guild.name}** and created/verified its managed strike roles.`);
+  await notifyOwner(`Strike bot joined **${guild.name}** and created/verified its managed strike roles.`);
 });
 
 client.on(Events.GuildMemberAdd, async (member) => {
@@ -857,7 +943,7 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
       !suppressedRoleRemovalNotices.delete(noticeKey)
     ) {
       await notifyOwner(
-        `⚠️ **Blacklist role removed** in ${newMember.guild.name}\nMember: ${newMember.user.tag} (${newMember.id})\nRole: ${key}\nThe role was removed outside the bot's strike sync.`
+        `Blacklist role removed in ${newMember.guild.name}\nMember: ${newMember.user.tag} (${newMember.id})\nRole: ${key}\nThe role was removed outside the bot's strike sync.`
       );
       await sendAudit(
         newMember.guild,
@@ -926,7 +1012,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
   } catch (error) {
     console.error('Command error:', error);
     const response = {
-      content: '❌ Something went wrong while processing that command.',
+      content: notCompleted('Something went wrong while processing that command.'),
       ephemeral: true,
     };
     if (interaction.replied || interaction.deferred) {

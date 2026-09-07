@@ -15,6 +15,14 @@ A Railway-ready Discord.js slash-command bot with a maximum of three active stri
 - `/revokeall` — revokes every active strike in the server.
 - `/set-channel channel` — sends public strike announcements to the selected channel.
 
+When a strike is revoked, the bot replies directly to the original strike announcement with:
+
+```text
+## REVOKED
+```
+
+`/revokeall` does the same for every original strike announcement that is still available.
+
 Strikes expire after **60 days**. If a member starts boosting, their active strikes are temporarily forgiven. If they stop boosting, the previous strikes return unless their original 60-day expiration has passed.
 
 Strikes are issued manually through the slash commands. There is no automatic message scanning or automatic strike generation.
@@ -57,6 +65,8 @@ When the bot joins a server, it creates or finds these roles:
 - `Blacklisted`
 
 At `3/3`, the bot applies all three final-state roles. If a blacklist role is manually removed outside the bot’s own strike synchronization, the bot alerts `1480120220269019146` by DM and records an audit event.
+
+Role synchronization is automatic: `1/3` applies `Strike 1`, `2/3` applies `Strike 2`, and `3/3` applies `Strike 3/3`, `Blacklisted from Perms 3/3`, and `Blacklisted`. Revoking a strike, revoking all strikes, expiration, or boost forgiveness removes the no-longer-correct roles and applies the remaining strike status.
 
 ## Local setup
 

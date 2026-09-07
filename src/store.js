@@ -172,6 +172,23 @@ function addStrike(guildId, userId, strike) {
   return guild.strikes[userId].map((item) => ({ ...item }));
 }
 
+function setStrikeAnnouncement(guildId, userId, strikeId, announcement) {
+  const database = readDatabase();
+  const guild = ensureGuild(database, guildId);
+  const active = (guild.strikes[userId] || []).find((record) => record.id === strikeId);
+  const history = (guild.history[userId] || []).find((record) => record.id === strikeId);
+  if (!active && !history) return false;
+
+  const values = {
+    announcementChannelId: announcement.channelId,
+    announcementMessageId: announcement.messageId,
+  };
+  if (active) Object.assign(active, values);
+  if (history) Object.assign(history, values);
+  writeDatabase(database);
+  return true;
+}
+
 function revokeLatestStrike(guildId, userId) {
   const database = readDatabase();
   const guild = ensureGuild(database, guildId);
@@ -194,6 +211,7 @@ function revokeAll(guildId) {
   const guild = ensureGuild(database, guildId);
   expireAll(guild);
   const userIds = Object.keys(guild.strikes);
+  const revokedRecords = [];
   let count = 0;
 
   for (const userId of userIds) {
@@ -201,12 +219,13 @@ function revokeAll(guildId) {
       record.status = 'revoked';
       record.revokedAt = new Date().toISOString();
       updateHistoryRecord(guild, userId, record);
+      revokedRecords.push({ userId, ...record });
       count += 1;
     }
   }
   guild.strikes = {};
   writeDatabase(database);
-  return { count, userIds };
+  return { count, userIds, revokedRecords };
 }
 
 function beginBoostForgiveness(guildId, userId) {
@@ -382,6 +401,7 @@ module.exports = {
   restoreBackup,
   revokeAll,
   revokeLatestStrike,
+  setStrikeAnnouncement,
   setConfig,
   setManagedRoles,
 };
