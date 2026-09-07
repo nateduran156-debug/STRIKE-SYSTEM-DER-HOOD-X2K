@@ -1,0 +1,18 @@
+{
+  "name": "discord-strike-system",
+  "version": "1.0.0",
+  "description": "Discord slash-command strike system with required proof attachments and a moderator whitelist.",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "deploy": "node src/register-commands.js",
+    "check": "node --check src/index.js && node --check src/commands.js && node --check src/register-commands.js && node --check src/store.js"
+  },
+  "engines": {
+    "node": ">=18.17.0"
+  },
+  "dependencies": {
+    "discord.js": "^14.16.3",
+    "dotenv": "^16.4.5"
+  }
+}
