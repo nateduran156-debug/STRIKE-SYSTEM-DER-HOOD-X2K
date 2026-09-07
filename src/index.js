@@ -44,7 +44,10 @@ const APPEAL_RECIPIENT_IDS = (
   .map((id) => id.trim())
   .filter(Boolean);
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers,
+  ],
 });
 const suppressedRoleRemovalNotices = new Set();
 
@@ -233,7 +236,9 @@ async function syncStrikeRoles(guild, userId) {
 async function storeProof(guild, targetUser, proof, moderator) {
   const config = getConfig(guild.id);
   const channel = await fetchTextChannel(guild, config.proofChannelId || config.auditChannelId);
-  if (!channel) return { proofUrl: proof.url, proofName: proof.name };
+  if (!channel) {
+    return { proofUrl: proof.url, proofName: proof.name, proofType: 'image' };
+  }
 
   try {
     const message = await channel.send({
@@ -247,10 +252,11 @@ async function storeProof(guild, targetUser, proof, moderator) {
       proofName: storedAttachment?.name || proof.name,
       proofMessageId: message.id,
       proofChannelId: channel.id,
+      proofType: 'image',
     };
   } catch (error) {
     console.error('Could not copy proof into evidence storage:', error.message);
-    return { proofUrl: proof.url, proofName: proof.name };
+    return { proofUrl: proof.url, proofName: proof.name, proofType: 'image' };
   }
 }
 
@@ -299,7 +305,7 @@ async function handleStrikeAdd(interaction) {
     storedProof.proofUrl
   );
 
-  await interaction.reply({
+  const strikePayload = {
     content: formatStrikeMessage(user.id, number, reason),
     embeds: [
       new EmbedBuilder()
@@ -310,7 +316,20 @@ async function handleStrikeAdd(interaction) {
         .setFooter({ text: `Issued by ${interaction.user.tag}` }),
     ],
     allowedMentions: { users: [user.id] },
-  });
+  };
+  const configuredChannel = await fetchTextChannel(
+    interaction.guild,
+    getConfig(interaction.guildId).strikeChannelId
+  );
+  if (configuredChannel && configuredChannel.id !== interaction.channelId) {
+    await configuredChannel.send(strikePayload);
+    await interaction.reply({
+      content: `✅ Strike announcement sent to <#${configuredChannel.id}>.`,
+      ephemeral: true,
+    });
+  } else {
+    await interaction.reply(strikePayload);
+  }
 }
 
 async function handleStrike3(interaction) {
@@ -363,7 +382,7 @@ async function handleStrike3(interaction) {
     storedProof.proofUrl
   );
 
-  await interaction.reply({
+  const finalStrikePayload = {
     content: `❌ - <@${user.id}> has been **${consequence}** due to **STRIKED 3/3** - ❌`,
     embeds: [
       new EmbedBuilder()
@@ -378,7 +397,20 @@ async function handleStrike3(interaction) {
         .setFooter({ text: `Issued by ${interaction.user.tag}` }),
     ],
     allowedMentions: { users: [user.id] },
-  });
+  };
+  const configuredChannel = await fetchTextChannel(
+    interaction.guild,
+    getConfig(interaction.guildId).strikeChannelId
+  );
+  if (configuredChannel && configuredChannel.id !== interaction.channelId) {
+    await configuredChannel.send(finalStrikePayload);
+    await interaction.reply({
+      content: `✅ Final strike announcement sent to <#${configuredChannel.id}>.`,
+      ephemeral: true,
+    });
+  } else {
+    await interaction.reply(finalStrikePayload);
+  }
 }
 
 async function handleProof(interaction) {
@@ -393,19 +425,26 @@ async function handleProof(interaction) {
     });
     return;
   }
+  const proofEmbed = new EmbedBuilder()
+    .setColor(0x5865f2)
+    .setTitle(`Latest strike proof — ${latest.number}/3`)
+    .setDescription(
+      `Proof for <@${user.id}>\n**Status:** ${latest.status}\n**Reason:** ${latest.reason}\n**Issued:** <t:${Math.floor(
+        new Date(latest.createdAt).getTime() / 1000
+      )}:F>`
+    )
+    .setFooter({ text: `Stored filename: ${latest.proofName || 'attachment'}` });
+  if (latest.proofType === 'message') {
+    proofEmbed.addFields({
+      name: 'Evidence message',
+      value: `[Open stored evidence](${latest.proofUrl})`,
+    });
+    proofEmbed.setURL(latest.proofUrl);
+  } else {
+    proofEmbed.setImage(latest.proofUrl);
+  }
   await interaction.reply({
-    embeds: [
-      new EmbedBuilder()
-        .setColor(0x5865f2)
-        .setTitle(`Latest strike proof — ${latest.number}/3`)
-        .setDescription(
-          `Proof for <@${user.id}>\n**Status:** ${latest.status}\n**Reason:** ${latest.reason}\n**Issued:** <t:${Math.floor(
-            new Date(latest.createdAt).getTime() / 1000
-          )}:F>`
-        )
-        .setImage(latest.proofUrl)
-        .setFooter({ text: `Stored filename: ${latest.proofName || 'attachment'}` }),
-    ],
+    embeds: [proofEmbed],
     allowedMentions: { users: [user.id] },
   });
 }
@@ -535,6 +574,7 @@ async function handleConfig(interaction) {
     const config = getConfig(interaction.guildId);
     await interaction.reply({
       content: [
+        `**Strike announcements:** ${config.strikeChannelId ? `<#${config.strikeChannelId}>` : 'current command channel'}`,
         `**Audit:** ${config.auditChannelId ? `<#${config.auditChannelId}>` : 'not configured'}`,
         `**Appeals:** ${config.appealsChannelId ? `<#${config.appealsChannelId}>` : 'not configured'}`,
         `**Notes:** ${config.notesChannelId ? `<#${config.notesChannelId}>` : 'not configured'}`,
@@ -561,6 +601,22 @@ async function handleConfig(interaction) {
     interaction.guild,
     'Strike system configuration changed',
     `<@${interaction.user.id}> set the ${subcommand} channel to <#${channel.id}>.`,
+    0x5865f2
+  );
+}
+
+async function handleSetChannel(interaction) {
+  if (!(await requireModerator(interaction))) return;
+  const channel = interaction.options.getChannel('channel');
+  setConfig(interaction.guildId, 'strikeChannelId', channel.id);
+  await interaction.reply({
+    content: `✅ Strike announcements will now be sent to <#${channel.id}>.`,
+    ephemeral: true,
+  });
+  await sendAudit(
+    interaction.guild,
+    'Strike announcement channel changed',
+    `<@${interaction.user.id}> set the strike announcement channel to <#${channel.id}>.`,
     0x5865f2
   );
 }
@@ -851,6 +907,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
     if (interaction.commandName === 'config') {
       await handleConfig(interaction);
+      return;
+    }
+    if (interaction.commandName === 'set-channel') {
+      await handleSetChannel(interaction);
       return;
     }
     if (interaction.commandName === 'backup') {

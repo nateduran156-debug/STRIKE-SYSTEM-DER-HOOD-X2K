@@ -1,6 +1,6 @@
 # Discord Strike System
 
-A Railway-ready Discord.js slash-command bot with a maximum of three active strikes per user. Moderation commands are whitelist-only. Every strike and appeal requires an image attachment.
+A Railway-ready Discord.js slash-command bot with a maximum of three active strikes per user. Moderation commands are whitelist-only. Every manual strike and appeal requires an image attachment.
 
 ## Commands
 
@@ -13,8 +13,11 @@ A Railway-ready Discord.js slash-command bot with a maximum of three active stri
 - `/strike history user` — shows active, revoked, expired, and boost-forgiven strikes.
 - `/proof user` — displays the latest stored strike proof.
 - `/revokeall` — revokes every active strike in the server.
+- `/set-channel channel` — sends public strike announcements to the selected channel.
 
 Strikes expire after **60 days**. If a member starts boosting, their active strikes are temporarily forgiven. If they stop boosting, the previous strikes return unless their original 60-day expiration has passed.
+
+Strikes are issued manually through the slash commands. There is no automatic message scanning or automatic strike generation.
 
 ### Whitelist and configuration
 
@@ -101,6 +104,8 @@ DATA_DIR=/app/data
 ```
 
 Attach a Railway Volume and mount it at the same path used by `DATA_DIR` so strikes and backups survive redeploys. Without a volume, Railway’s local filesystem can be reset and the JSON database can be lost.
+
+The project includes `nixpacks.toml` and explicitly uses `npm install --omit=dev --no-audit --no-fund` instead of Railway’s failing cached `npm ci` step. It targets Node 20 through `.nvmrc` and `package.json`.
 
 ## Proof storage
 

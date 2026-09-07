@@ -162,6 +162,17 @@ const commands = [
     ),
 
   new SlashCommandBuilder()
+    .setName('set-channel')
+    .setDescription('Set the channel where strike announcements are sent')
+    .addChannelOption((option) =>
+      option
+        .setName('channel')
+        .setDescription('Channel for public strike announcements')
+        .addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
+        .setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
     .setName('appeal')
     .setDescription('Submit an appeal to the configured appeals channel')
     .addStringOption((option) =>
