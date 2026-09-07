@@ -307,14 +307,6 @@ async function handleStrikeAdd(interaction) {
 
   const strikePayload = {
     content: formatStrikeMessage(user.id, number, reason),
-    embeds: [
-      new EmbedBuilder()
-        .setColor(number === 3 ? 0x992d22 : 0xed4245)
-        .setTitle(`Strike ${number}/3`)
-        .setDescription(`Proof stored for <@${user.id}>.`)
-        .setImage(storedProof.proofUrl)
-        .setFooter({ text: `Issued by ${interaction.user.tag}` }),
-    ],
     allowedMentions: { users: [user.id] },
   };
   const configuredChannel = await fetchTextChannel(
@@ -384,18 +376,6 @@ async function handleStrike3(interaction) {
 
   const finalStrikePayload = {
     content: `❌ - <@${user.id}> has been **${consequence}** due to **STRIKED 3/3** - ❌`,
-    embeds: [
-      new EmbedBuilder()
-        .setColor(0x992d22)
-        .setTitle('Final strike — 3/3')
-        .addFields(
-          { name: 'User', value: `<@${user.id}>`, inline: true },
-          { name: 'Reason', value: reason, inline: true },
-          { name: 'Consequence', value: consequence }
-        )
-        .setImage(storedProof.proofUrl)
-        .setFooter({ text: `Issued by ${interaction.user.tag}` }),
-    ],
     allowedMentions: { users: [user.id] },
   };
   const configuredChannel = await fetchTextChannel(
@@ -446,6 +426,7 @@ async function handleProof(interaction) {
   await interaction.reply({
     embeds: [proofEmbed],
     allowedMentions: { users: [user.id] },
+    ephemeral: true,
   });
 }
 
